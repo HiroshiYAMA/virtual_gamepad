@@ -39,3 +39,47 @@ make -j$(nproc) install
 1. (ターミナル3) 受信モジュールを起動する
     * caller モードにする
     * `vgmpad_recv 中継モジュールのホスト名または IP アドレス:ポート番号2`
+
+## ファイヤーウォール経由で http/https/ssh くらいしか通信が通らない場合
+
+SSH と [stone](http://www.gcd.org/sengoku/stone/Welcome.ja.html) を使う。
+SRT は UDP で通信するけど、SSH のポートフォワーディングは TCP しか通さないから、stone で TCP <---> UDP 変換をする。
+
+### ケース1 受信モジュールがファイヤーウォール内にいる場合
+
+中継モジュールが動作しているところを **SERVER-01** 、
+受信モジュールが動作しているところを **RECV-02** として、
+実行手順に下記の作業を追加する。
+
+#### **SERVER-01** での作業
+
+stone (TCP -> UDP 変換)を設定する。
+```bash
+stone localhost:ポート番号2/udp ポート番号2 &    # バックグラウンド実行
+```
+
+#### **RECV-02** での作業
+
+SSH ポートフォワーディングを設定する。
+```bash
+ssh -L ポート番号2:localhost:ポート番号2 SERVER-01 -N &    # バックグラウンド実行のために & ではなく -f オプションでも大丈夫
+```
+
+stone (UDP -> TCP 変換)を設定する。
+```bash
+stone localhost:ポート番号2 ポート番号2/udp &    # バックグラウンド実行
+```
+
+受信モジュールは、localhost(**RECV-02**) に繋げば OK。
+```bash
+vgmpad_recv localhost:ポート番号2
+```
+
+上記の結果、通信経路は下記のようになる。
+```bash
+vgmpad_recv
+--> RECV-02:14202 @ UDP --> RECV-02:14202 @ TCP    # stone UDP --> TCP
+  --> RECV-02:ssh --> SERVER-01:ssh    # ssh port forwarding
+    --> SERVER-01:14202 @ TCP --> SERVER-01:14202 @ UDP    # stone TCP --> UDP
+      --> 中継モジュール(srt-live-transmit)
+```
