@@ -297,28 +297,12 @@ public:
 		m_name = name;
 		m_service = service;
 
-		if (mode == em_Mode::SEND) {
-			m_sock = srt_create_socket();
-			if ( m_sock == SRT_ERROR ) {
-				LogError("srt_create_socket");
-				return false;
-			}
-
-			// pre config.
-			bool no = false;
-			int result;
-			result = srt_setsockopt(m_sock, 0, SRTO_RCVSYN, &no, sizeof no);
-			if ( result == -1 ) {
-				LogError("Can't set SRT option : %s(%s)\n", "SRTO_RCVSYN", no ? "true" : "false");
-				srt_close(m_sock);
-				return false;
-			}
-
-			// get addrinfo.
+		// get addrinfo.
+		{
 			addrinfo fo = {
-				0,
+				AI_PASSIVE,
 				AF_UNSPEC,
-				0, 0,
+				SOCK_DGRAM, IPPROTO_UDP,
 				0, 0,
 				NULL, NULL
 			};
@@ -331,6 +315,24 @@ public:
 				m_ai = *val;
 			}
 			freeaddrinfo(val);
+		}
+
+		m_sock = srt_create_socket();
+		if ( m_sock == SRT_ERROR ) {
+			LogError("srt_create_socket");
+			return false;
+		}
+
+		if (mode == em_Mode::SEND) {
+			// pre config.
+			bool no = false;
+			int result;
+			result = srt_setsockopt(m_sock, 0, SRTO_RCVSYN, &no, sizeof no);
+			if ( result == -1 ) {
+				LogError("Can't set SRT option : %s(%s)\n", "SRTO_RCVSYN", no ? "true" : "false");
+				srt_close(m_sock);
+				return false;
+			}
 
 			// connect to the receiver, implicit bind
 			if (SRT_ERROR == srt_connect(m_sock, m_ai.ai_addr, m_ai.ai_addrlen))
@@ -359,12 +361,6 @@ public:
 			LogInfo("SUCCESS!! open virtual gamepad(SEND).\n");
 
 		} else if (mode == em_Mode::RECEIVE) {
-			m_sock = srt_create_socket();
-			if ( m_sock == SRT_ERROR ) {
-				LogError("srt_create_socket");
-				return false;
-			}
-
 			// pre config.
 			bool no = false;
 			int result;
@@ -374,24 +370,6 @@ public:
 				srt_close(m_sock);
 				return false;
 			}
-
-			// get addrinfo.
-			addrinfo fo = {
-				0,
-				AF_UNSPEC,
-				0, 0,
-				0, 0,
-				NULL, NULL
-			};
-			addrinfo* val = nullptr;
-			const char *n = (name.empty() || name == "") ? nullptr : name.c_str();
-			const char *s = (service.empty() || service == "") ? nullptr : service.c_str();
-			int erc = getaddrinfo(n, s, &fo, &val);
-			if (erc == 0)
-			{
-				m_ai = *val;
-			}
-			freeaddrinfo(val);
 
 			// connect to the receiver, implicit bind
 			if (SRT_ERROR == srt_connect(m_sock, m_ai.ai_addr, m_ai.ai_addrlen))
