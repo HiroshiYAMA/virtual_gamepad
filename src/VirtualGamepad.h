@@ -73,7 +73,7 @@ protected:
 	em_Mode m_mode = em_Mode::NONE;
 	std::string m_name;
 	std::string m_service;
-	addrinfo m_ai;
+	addrinfo *m_ai = nullptr;
 	bool m_connected = false;
 
 	njson m_js;
@@ -410,16 +410,10 @@ public:
 				0, 0,
 				NULL, NULL
 			};
-			addrinfo* val = nullptr;
 			const char *n = (name.empty() || name == "") ? nullptr : name.c_str();
 			const char *s = (service.empty() || service == "") ? nullptr : service.c_str();
-			int erc = getaddrinfo(n, s, &fo, &val);
-			if (erc == 0)
-			{
-				m_ai = *val;
-				freeaddrinfo(val);
-			}
-			else
+			int erc = getaddrinfo(n, s, &fo, &m_ai);
+			if (erc != 0)
 			{
 				LogError("ERROR!! getaddrinfo(errno=%d): name=%s, service=%s.\n", erc, name.c_str(), service.c_str());
 				srt_close(m_sock);
@@ -445,7 +439,7 @@ public:
 			}
 
 			// connect to the receiver, implicit bind
-			if (SRT_ERROR == srt_connect(m_sock, m_ai.ai_addr, m_ai.ai_addrlen))
+			if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
 			{
 				LogError("connect: %s\n", srt_getlasterror_str());
 				srt_close(m_sock);
@@ -482,7 +476,7 @@ public:
 			}
 
 			// connect to the receiver, implicit bind
-			if (SRT_ERROR == srt_connect(m_sock, m_ai.ai_addr, m_ai.ai_addrlen))
+			if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
 			{
 				LogError("connect: %s\n", srt_getlasterror_str());
 				srt_close(m_sock);
@@ -516,6 +510,8 @@ public:
 		bool ret = false;
 
 		if (m_sock != SRT_INVALID_SOCK) {
+			freeaddrinfo(m_ai);
+			m_ai = nullptr;
 			int r = srt_close(m_sock);
 			m_sock = SRT_INVALID_SOCK;
 			if (r != SRT_ERROR) ret = true;
@@ -831,23 +827,17 @@ public:
 				0, 0,
 				NULL, NULL
 			};
-			addrinfo* val = nullptr;
 			const char *n = (name.empty() || name == "") ? nullptr : name.c_str();
 			const char *s = (service.empty() || service == "") ? nullptr : service.c_str();
-			int erc = getaddrinfo(n, s, &fo, &val);
-			if (erc == 0)
-			{
-				m_ai = *val;
-				freeaddrinfo(val);
-			}
-			else
+			int erc = getaddrinfo(n, s, &fo, &m_ai);
+			if (erc != 0)
 			{
 				LogError("ERROR!! getaddrinfo(errno=%d): name=%s, service=%s.\n", erc, name.c_str(), service.c_str());
 				return false;
 			}
 		}
 
-		m_sock = socket(m_ai.ai_family, m_ai.ai_socktype, 0);
+		m_sock = socket(m_ai->ai_family, m_ai->ai_socktype, 0);
 		if ( m_sock < 0 ) {
 			LogError("create socket\n");
 			return false;
@@ -867,7 +857,7 @@ public:
 
 		} else if (mode == em_Mode::RECEIVE) {
 			// pre config.
-			if (::bind(m_sock, m_ai.ai_addr, m_ai.ai_addrlen) != 0) {
+			if (::bind(m_sock, m_ai->ai_addr, m_ai->ai_addrlen) != 0) {
 				LogError("ERROR!! bind\n");
 				return false;
 			}
@@ -890,6 +880,8 @@ public:
 		bool ret = false;
 
 		if (m_sock >= 0) {
+			freeaddrinfo(m_ai);
+			m_ai = nullptr;
 			int r = ::close(m_sock);
 			m_sock = -1;
 			if (r >= 0) ret = true;
@@ -963,7 +955,7 @@ public:
 				while (!dataqueue.empty())
 				{
 					std::vector<char> pkt = dataqueue.front();
-					int stat = sendto(m_sock, pkt.data(), pkt.size(), 0, m_ai.ai_addr, m_ai.ai_addrlen);
+					int stat = sendto(m_sock, pkt.data(), pkt.size(), 0, m_ai->ai_addr, m_ai->ai_addrlen);
 					if (stat < 1)
 					{
 						LogError("ERROR!! send UDP packet.\n");
