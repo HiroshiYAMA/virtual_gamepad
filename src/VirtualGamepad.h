@@ -28,6 +28,7 @@
 #include <vector>
 #include <list>
 #include <deque>
+#include <tuple>
 
 #include <chrono>
 #include <mutex>
@@ -57,7 +58,7 @@ using njson = nlohmann::json;
 
 
 // base class for derived VirtualGamepad### class.
-class VirtualGampad
+class VirtualGamepad
 {
 public:
 	enum class em_Mode : int {
@@ -119,7 +120,7 @@ protected:
 
 public:
 	NLOHMANN_DEFINE_TYPE_INTRUSIVE(
-		VirtualGampad,
+		VirtualGamepad,
 
 		axis_motion,
 		button_down,
@@ -154,6 +155,38 @@ public:
 		/* NEED IMPLEMENTATION in sub-class. */
 	}
 
+	static std::tuple<std::string, std::string, std::string> get_name_service(const char *str)
+	{
+		std::string name = "";
+		std::string service = "";
+		std::string protocol = "";
+
+		std::string s(str);
+		auto itr_s = std::find(s.begin(), s.end(), ':');
+		auto itr_p = std::find(s.begin(), s.end(), '/');
+
+		if (itr_s >= itr_p) {
+			return { std::string{""}, std::string{""}, std::string{""} };
+		}
+
+		if (itr_s != s.end()) {
+			name = { s.begin(), itr_s };
+			service = { itr_s + 1, itr_p };
+		}
+
+		if (itr_p != s.end()) {
+			protocol = { itr_p + 1, s.end() };
+		}
+
+		std::transform(protocol.cbegin(), protocol.cend(), protocol.begin(), ::tolower);
+		if (protocol == "") protocol = "srt";
+		if (protocol != "udp" && protocol != "srt") {
+			return { std::string{""}, std::string{""}, std::string{""} };
+		}
+
+		return { name, service, protocol };
+	}
+
 	// Is Gamepad Attached.
 	virtual bool IsAttached() const = 0;
 
@@ -186,9 +219,9 @@ public:
 	uint8_t GetButton_Dpad_L() const { return button_Dpad_L; }
 	uint8_t GetButton_Dpad_R() const { return button_Dpad_R; }
 
-	VirtualGampad() { clear_stat(); }
+	VirtualGamepad() { clear_stat(); }
 
-	virtual ~VirtualGampad() {}
+	virtual ~VirtualGamepad() {}
 
 	void clear_stat()
 	{
@@ -283,11 +316,11 @@ public:
 		return ret;
 	}
 
-	friend std::ostream &operator<<(std::ostream &ostr, const VirtualGampad &vg);
+	friend std::ostream &operator<<(std::ostream &ostr, const VirtualGamepad &vg);
 };
 
 #ifdef USE_SRT
-class VirtualGampadSRT : public VirtualGampad
+class VirtualGamepadSRT : public VirtualGamepad
 {
 private:
 	SRTSOCKET m_sock = SRT_INVALID_SOCK;
@@ -303,9 +336,9 @@ private:
 protected:
 
 public:
-	static std::unique_ptr<VirtualGampadSRT> Create(const std::string &name, const std::string &service, em_Mode mode)
+	static std::unique_ptr<VirtualGamepadSRT> Create(const std::string &name, const std::string &service, em_Mode mode)
 	{
-		auto vgmpad = std::make_unique<VirtualGampadSRT>();
+		auto vgmpad = std::make_unique<VirtualGamepadSRT>();
 		auto ret = vgmpad->open(name, service, mode);
 
 		LogInfo("======== Virtual Gamepad ========\n");
@@ -336,7 +369,7 @@ public:
 		return receive(timeout);
 	}
 
-	VirtualGampadSRT()
+	VirtualGamepadSRT()
 	{
 		m_pollid = srt_epoll_create();
 		if (m_pollid < 0)
@@ -347,7 +380,7 @@ public:
 		LogInfo("m_pollid = %d\n", m_pollid);
 	}
 
-	virtual ~VirtualGampadSRT()
+	virtual ~VirtualGamepadSRT()
 	{
 		if (!close()) {
 			LogError("ERROR!! VirtualGamepad close.\n");
@@ -695,19 +728,54 @@ public:
 		return true;
 	}
 };
-#endif
-
-class VirtualGampadUDP : public VirtualGampad
+#else
+class VirtualGamepadSRT : public VirtualGamepad
 {
 private:
+
+protected:
+
+public:
+	static std::unique_ptr<VirtualGamepadSRT> Create(const std::string &name, const std::string &service, em_Mode mode)
+	{
+		auto vgmpad = std::make_unique<VirtualGamepadSRT>();
+		vgmpad.reset();
+
+		return std::move(vgmpad);
+	}
+
+	// Is Gamepad Attached.
+	bool IsAttached() const override { return false; }
+
+	bool Poll( uint32_t timeout=0 ) override { return false; }
+
+	VirtualGamepadSRT()
+	{
+		LogError("This execution binary is not support SRT.\n");
+		LogError("If you need SRT, re-build with 'USE_SRT' option enabled.\n");
+	}
+
+	virtual ~VirtualGamepadSRT() {}
+
+	bool open(const std::string &name, const std::string &service, em_Mode mode) override { return false; }
+	bool close() override { return false; }
+	bool poll(int64_t time_out = 33) override { return false; }
+};
+#endif
+
+class VirtualGamepadUDP : public VirtualGamepad
+{
+private:
+	static constexpr auto WAIT_FOR_RECONNECT = 500;	// [msec].
+
 	int m_sock = -1;
 
 protected:
 
 public:
-	static std::unique_ptr<VirtualGampadUDP> Create(const std::string &name, const std::string &service, em_Mode mode)
+	static std::unique_ptr<VirtualGamepadUDP> Create(const std::string &name, const std::string &service, em_Mode mode)
 	{
-		auto vgmpad = std::make_unique<VirtualGampadUDP>();
+		auto vgmpad = std::make_unique<VirtualGamepadUDP>();
 		auto ret = vgmpad->open(name, service, mode);
 
 		LogInfo("======== Virtual Gamepad ========\n");
@@ -738,9 +806,9 @@ public:
 		return receive(timeout);
 	}
 
-	VirtualGampadUDP() {}
+	VirtualGamepadUDP() {}
 
-	virtual ~VirtualGampadUDP()
+	virtual ~VirtualGamepadUDP()
 	{
 		if (!close()) {
 			LogError("ERROR!! VirtualGamepad close.\n");
@@ -791,7 +859,7 @@ public:
 			setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof yes);
 			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
 			{
-				LogError("VirtualGampadUDP" "ioctl FIONBIO\n");
+				LogError("VirtualGamepadUDP" "ioctl FIONBIO\n");
 				return false;
 			}
 
@@ -807,7 +875,7 @@ public:
 			int yes = 1;
 			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
 			{
-				LogError("VirtualGampadUDP" "ioctl FIONBIO\n");
+				LogError("VirtualGamepadUDP" "ioctl FIONBIO\n");
 				return false;
 			}
 
@@ -821,7 +889,7 @@ public:
 	{
 		bool ret = false;
 
-		if (m_sock < 0) {
+		if (m_sock >= 0) {
 			int r = ::close(m_sock);
 			m_sock = -1;
 			if (r >= 0) ret = true;
@@ -899,6 +967,8 @@ public:
 					if (stat < 1)
 					{
 						LogError("ERROR!! send UDP packet.\n");
+						close();	// to reconnect.
+						std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_FOR_RECONNECT));
 						return false;
 					}
 					dataqueue.pop_front();
@@ -910,7 +980,7 @@ public:
 	}
 };
 
-std::ostream &operator<<(std::ostream &ostr, const VirtualGampad &vg)
+std::ostream &operator<<(std::ostream &ostr, const VirtualGamepad &vg)
 {
 	ostr << "axis_motion = " << std::boolalpha << vg.axis_motion << std::endl;
 	ostr << "button_down = " << std::boolalpha << vg.button_down << std::endl;

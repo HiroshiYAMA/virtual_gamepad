@@ -62,39 +62,34 @@ static void sig_handler(int signo)
 	}
 }
 
-std::tuple<std::string, std::string> get_name_service(const char *str)
+static void print_usage()
 {
-	std::string name = "";
-	std::string service = "";
-
-	std::string s(str);
-	auto itr = std::find(s.begin(), s.end(), ':');
-	if (itr != s.end()) {
-		name = { s.begin(), itr };
-		service = { itr + 1, s.end() };
-	}
-
-	return { name, service };
+	LogInfo("usage: vgmpad_send [host_name]:port[/protocol]\n");
+	LogInfo("  protocol: srt, udp. If not specified, it is 'srt'.\n");
 }
 
 int main(int argc, char *argv[])
 {
 	if (argc < 2) {
-		LogInfo("usage: vgmpad_recv [host_name]:port\n");
+		print_usage();
 		exit(EXIT_FAILURE);
 	}
 
-	auto [ name, service ] = get_name_service(argv[1]);
+	auto [ name, service, protocol ] = VirtualGamepad::get_name_service(argv[1]);
+	if (name == "" && service == "" && protocol == "") {
+		print_usage();
+		exit(EXIT_FAILURE);
+	}
 
 	if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_VIDEO) != 0) {
-		LogError("Unable to initialize SDL: %s", SDL_GetError());
+		LogError("Unable to initialize SDL: %s\n", SDL_GetError());
 		return EXIT_FAILURE;
 	}
 	atexit(SDL_Quit);
 
 #ifdef USE_SRT
 	if (srt_startup() < 0) {
-		LogError("Unable to initialize SRT: %s", srt_getlasterror_str());
+		LogError("Unable to initialize SRT: %s\n", srt_getlasterror_str());
 		return EXIT_FAILURE;
 	}
 #endif
@@ -110,12 +105,12 @@ int main(int argc, char *argv[])
 	// create gamepad.
 	gamepad = GamepadDevice::Create();
 
-	std::unique_ptr<VirtualGampad> vgmpad;
-#ifdef USE_SRT
-	vgmpad = VirtualGampadSRT::Create(name, service, VirtualGampad::em_Mode::SEND);
-#else
-	vgmpad = VirtualGampadUDP::Create(name, service, VirtualGampad::em_Mode::SEND);
-#endif
+	std::unique_ptr<VirtualGamepad> vgmpad;
+	if (protocol == "udp") {
+		vgmpad = VirtualGamepadUDP::Create(name, service, VirtualGamepad::em_Mode::SEND);
+	} else {
+		vgmpad = VirtualGamepadSRT::Create(name, service, VirtualGamepad::em_Mode::SEND);
+	}
 	if (!vgmpad) {
 		LogError("ERROR!! open virtual gamepad.\n");
 		return EXIT_FAILURE;
@@ -143,7 +138,7 @@ int main(int argc, char *argv[])
 
 #ifdef USE_SRT
 	if (srt_cleanup() != 0) {
-		LogError("Unable to cleanup SRT: %s", srt_getlasterror_str());
+		LogError("Unable to cleanup SRT: %s\n", srt_getlasterror_str());
 		return EXIT_FAILURE;
 	}
 #endif
