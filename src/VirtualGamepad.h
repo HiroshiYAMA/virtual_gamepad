@@ -509,9 +509,12 @@ public:
 	{
 		bool ret = false;
 
-		if (m_sock != SRT_INVALID_SOCK) {
+		if (!m_ai) {
 			freeaddrinfo(m_ai);
 			m_ai = nullptr;
+		}
+
+		if (m_sock != SRT_INVALID_SOCK) {
 			int r = srt_close(m_sock);
 			m_sock = SRT_INVALID_SOCK;
 			if (r != SRT_ERROR) ret = true;
@@ -879,9 +882,12 @@ public:
 	{
 		bool ret = false;
 
-		if (m_sock >= 0) {
+		if (!m_ai) {
 			freeaddrinfo(m_ai);
 			m_ai = nullptr;
+		}
+
+		if (m_sock >= 0) {
 			int r = ::close(m_sock);
 			m_sock = -1;
 			if (r >= 0) ret = true;
