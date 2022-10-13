@@ -42,7 +42,9 @@ namespace fs = std::filesystem;
 #endif
 #endif
 
+#ifdef USE_SRT
 #include <srt.h>
+#endif
 #include "VirtualGamepad.h"
 
 auto Usleep = [](uint64_t t) -> void {
@@ -90,10 +92,12 @@ int main(int argc, char *argv[])
 	}
 	atexit(SDL_Quit);
 
+#ifdef USE_SRT
 	if (srt_startup() < 0) {
 		LogError("Unable to initialize SRT: %s", srt_getlasterror_str());
 		return EXIT_FAILURE;
 	}
+#endif
 
 	/*
 	 * attach signal handler
@@ -106,36 +110,43 @@ int main(int argc, char *argv[])
 	// create gamepad.
 	gamepad = GamepadDevice::Create();
 
-	VirtualGampad vgmpad;
-	njson js;
-	to_json(js, vgmpad);
-	from_json(js, vgmpad);
-	if (!vgmpad.open(name, service, VirtualGampad::em_Mode::SEND)) {
+	std::unique_ptr<VirtualGampad> vgmpad;
+#ifdef USE_SRT
+	vgmpad = VirtualGampadSRT::Create(name, service, VirtualGampad::em_Mode::SEND);
+#else
+	vgmpad = VirtualGampadUDP::Create(name, service, VirtualGampad::em_Mode::SEND);
+#endif
+	if (!vgmpad) {
 		LogError("ERROR!! open virtual gamepad.\n");
 		return EXIT_FAILURE;
 	}
+	njson js;
+	to_json(js, *vgmpad);
+	from_json(js, *vgmpad);
 	while (!signal_recieved) {
 		uint32_t timeout = 1000;	// dummy.
 		gamepad->Poll(timeout);
 
 		if (gamepad->IsAttached()) {
-			vgmpad.update(gamepad);
+			vgmpad->update(gamepad);
 		}
 
 		// std::cout << vgmpad << std::endl;
-		to_json(js, vgmpad);
+		to_json(js, *vgmpad);
 		std::cout << std::setw(4) << js << std::endl;
 
-		vgmpad.send(33);
+		vgmpad->send(33);
 
 		auto fps = 10.0;
 		Usleep((1.0 / fps) * 1'000'000.0);
 	}
 
+#ifdef USE_SRT
 	if (srt_cleanup() != 0) {
 		LogError("Unable to cleanup SRT: %s", srt_getlasterror_str());
 		return EXIT_FAILURE;
 	}
+#endif
 
 	return EXIT_SUCCESS;
 }

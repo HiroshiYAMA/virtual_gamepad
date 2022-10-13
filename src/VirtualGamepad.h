@@ -33,7 +33,21 @@
 #include <mutex>
 #include <thread>
 
+#ifdef USE_SRT
 #include <srt.h>
+#else
+#include <sys/epoll.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 
 #include "devGamepad.h"
 
@@ -42,6 +56,7 @@ using njson = nlohmann::json;
 
 
 
+// base class for derived VirtualGamepad### class.
 class VirtualGampad
 {
 public:
@@ -52,20 +67,13 @@ public:
 	};
 
 private:
+
+protected:
 	em_Mode m_mode = em_Mode::NONE;
 	std::string m_name;
 	std::string m_service;
-	SRTSOCKET m_sock = SRT_INVALID_SOCK;
 	addrinfo m_ai;
 	bool m_connected = false;
-
-	// epoll.
-	int m_pollid = -1;
-	int m_srtrfdslen = 2;
-	int m_srtwfdslen = 2;
-	SRTSOCKET m_srtrwfds[4] = {SRT_INVALID_SOCK, SRT_INVALID_SOCK , SRT_INVALID_SOCK , SRT_INVALID_SOCK };
-	// int m_sysrfdslen = 2;
-	// SYSSOCKET m_sysrfds[2];
 
 	njson m_js;
 	// std::mutex m_mtx;
@@ -100,7 +108,14 @@ private:
 	uint8_t button_Dpad_L = 0;
 	uint8_t button_Dpad_R = 0;
 
-protected:
+	void clear_axis_button_status()
+	{
+		if (!m_js.empty()) {
+			m_js["axis_motion"] = false;
+			m_js["button_down"] = false;
+			m_js["button_up"] = false;
+		}
+	}
 
 public:
 	NLOHMANN_DEFINE_TYPE_INTRUSIVE(
@@ -134,38 +149,15 @@ public:
 		button_Dpad_R
 	)
 
-	static std::unique_ptr<VirtualGampad> Create(const std::string &name, const std::string &service, em_Mode mode)
+	static void Create(const std::string &name, const std::string &service, em_Mode mode)
 	{
-		auto vgmpad = std::make_unique<VirtualGampad>();
-		auto ret = vgmpad->open(name, service, mode);
-
-		LogInfo("======== Virtual Gamepad ========\n");
-
-		if (!ret) {
-			LogError("virtual gamepad -- can't opened\n");
-			// vgmpad.reset();
-		} else {
-			std::string mode_str;
-			if (mode == em_Mode::RECEIVE) {
-				mode_str = "Receive";
-			} else if (mode == em_Mode::SEND) {
-				mode_str = "Send";
-			} else {
-				mode_str = "None";
-			}
-			LogSuccess("virtual gamepad -- opened(%s) %s:%s\n", mode_str.c_str(), name.c_str(), service.c_str());
-		}
-
-		return std::move(vgmpad);
+		/* NEED IMPLEMENTATION in sub-class. */
 	}
 
 	// Is Gamepad Attached.
-	bool IsAttached() const { return (m_sock != SRT_INVALID_SOCK); }
+	virtual bool IsAttached() const = 0;
 
-	bool Poll( uint32_t timeout=0 )
-	{
-		return receive(timeout);
-	}
+	virtual bool Poll( uint32_t timeout=0 ) = 0;
 
 	bool IsAxisMotion() const { return axis_motion; }
 	bool IsButtonDown() const { return button_down; }
@@ -194,33 +186,9 @@ public:
 	uint8_t GetButton_Dpad_L() const { return button_Dpad_L; }
 	uint8_t GetButton_Dpad_R() const { return button_Dpad_R; }
 
-	VirtualGampad()
-	{
-		m_pollid = srt_epoll_create();
-		if (m_pollid < 0)
-		{
-			std::cerr << "Can't initialize epoll" << std::endl;
-			exit(EXIT_FAILURE);
-		}
-		LogInfo("m_pollid = %d\n", m_pollid);
+	VirtualGampad() { clear_stat(); }
 
-		clear_stat();
-	}
-
-	virtual ~VirtualGampad()
-	{
-		if (!close()) {
-			LogError("ERROR!! VirtualGamepad close.\n");
-			// exit(EXIT_FAILURE);
-		}
-
-		int ret = srt_epoll_release(m_pollid);
-		if (ret < 0)
-		{
-			std::cerr << "Can't release epoll" << " : " << m_pollid << std::endl;
-			// exit(EXIT_FAILURE);
-		}
-	}
+	virtual ~VirtualGampad() {}
 
 	void clear_stat()
 	{
@@ -291,7 +259,110 @@ public:
 		return true;
 	}
 
-	bool open(const std::string &name, const std::string &service, em_Mode mode)
+	virtual bool open(const std::string &name, const std::string &service, em_Mode mode) = 0;
+	virtual bool close() = 0;
+	virtual bool poll(int64_t time_out = 33) = 0;
+
+	bool send(int64_t time_out = 33)
+	{
+		to_json(m_js, *this);
+
+		return poll(time_out);
+	}
+
+	bool receive(int64_t time_out = 33)
+	{
+		bool ret = poll(time_out);
+		if (ret) {
+			// LogDebug("poll() : true\n");
+		} else {
+			// LogDebug("poll() : false\n");
+		}
+		if (!m_js.empty()) from_json(m_js, *this);
+
+		return ret;
+	}
+
+	friend std::ostream &operator<<(std::ostream &ostr, const VirtualGampad &vg);
+};
+
+#ifdef USE_SRT
+class VirtualGampadSRT : public VirtualGampad
+{
+private:
+	SRTSOCKET m_sock = SRT_INVALID_SOCK;
+
+	// epoll.
+	int m_pollid = -1;
+	int m_srtrfdslen = 2;
+	int m_srtwfdslen = 2;
+	SRTSOCKET m_srtrwfds[4] = {SRT_INVALID_SOCK, SRT_INVALID_SOCK , SRT_INVALID_SOCK , SRT_INVALID_SOCK };
+	// int m_sysrfdslen = 2;
+	// SYSSOCKET m_sysrfds[2];
+
+protected:
+
+public:
+	static std::unique_ptr<VirtualGampadSRT> Create(const std::string &name, const std::string &service, em_Mode mode)
+	{
+		auto vgmpad = std::make_unique<VirtualGampadSRT>();
+		auto ret = vgmpad->open(name, service, mode);
+
+		LogInfo("======== Virtual Gamepad ========\n");
+
+		if (!ret) {
+			LogError("virtual gamepad -- can't opened\n");
+			// vgmpad.reset();
+		} else {
+			std::string mode_str;
+			if (mode == em_Mode::RECEIVE) {
+				mode_str = "Receive";
+			} else if (mode == em_Mode::SEND) {
+				mode_str = "Send";
+			} else {
+				mode_str = "None";
+			}
+			LogSuccess("virtual gamepad -- opened(%s) %s:%s\n", mode_str.c_str(), name.c_str(), service.c_str());
+		}
+
+		return std::move(vgmpad);
+	}
+
+	// Is Gamepad Attached.
+	bool IsAttached() const override { return (m_sock != SRT_INVALID_SOCK); }
+
+	bool Poll( uint32_t timeout=0 ) override
+	{
+		return receive(timeout);
+	}
+
+	VirtualGampadSRT()
+	{
+		m_pollid = srt_epoll_create();
+		if (m_pollid < 0)
+		{
+			std::cerr << "Can't initialize epoll" << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		LogInfo("m_pollid = %d\n", m_pollid);
+	}
+
+	virtual ~VirtualGampadSRT()
+	{
+		if (!close()) {
+			LogError("ERROR!! VirtualGamepad close.\n");
+			// exit(EXIT_FAILURE);
+		}
+
+		int ret = srt_epoll_release(m_pollid);
+		if (ret < 0)
+		{
+			std::cerr << "Can't release epoll" << " : " << m_pollid << std::endl;
+			// exit(EXIT_FAILURE);
+		}
+	}
+
+	bool open(const std::string &name, const std::string &service, em_Mode mode) override
 	{
 		m_mode = mode;
 		m_name = name;
@@ -313,13 +384,19 @@ public:
 			if (erc == 0)
 			{
 				m_ai = *val;
+				freeaddrinfo(val);
 			}
-			freeaddrinfo(val);
+			else
+			{
+				LogError("ERROR!! getaddrinfo(errno=%d): name=%s, service=%s.\n", erc, name.c_str(), service.c_str());
+				srt_close(m_sock);
+				return false;
+			}
 		}
 
 		m_sock = srt_create_socket();
 		if ( m_sock == SRT_ERROR ) {
-			LogError("srt_create_socket");
+			LogError("srt_create_socket\n");
 			return false;
 		}
 
@@ -401,7 +478,7 @@ public:
 		return true;
 	}
 
-	bool close()
+	bool close() override
 	{
 		bool ret = false;
 
@@ -414,29 +491,10 @@ public:
 		return ret;
 	}
 
-	bool send(int64_t time_out = 33)
+	bool poll(int64_t time_out = 33) override
 	{
-		to_json(m_js, *this);
-
-		return poll(time_out);
-	}
-
-	bool receive(int64_t time_out = 33)
-	{
-		bool ret = poll(time_out);
-		if (ret) {
-			// LogDebug("poll() : true\n");
-			if (!m_js.empty()) from_json(m_js, *this);
-		} else {
-			// LogDebug("poll() : false\n");
-		}
-
-		return ret;
-	}
-
-	bool poll(int64_t time_out = 33)
-	{
-		if (m_sock == SRT_INVALID_SOCK) {
+		if (m_sock == SRT_INVALID_SOCK)
+		{
 			if (!open(m_name, m_service, m_mode)) return false;
 		}
 
@@ -576,7 +634,8 @@ public:
 					// LogDebug("ctrl.srctime(recv) = %ld\n", ctrl.srctime);
 					if (stat <= 0)
 					{
-						pkt.clear();
+						// LogInfo("Empty packets\n");
+						clear_axis_button_status();
 						return false;
 					}
 					if (stat < pkt.size()) pkt.resize(stat);
@@ -584,11 +643,8 @@ public:
 
 				} else {
 					// LogInfo("Empty packets\n");
-					if (!m_js.empty()) {
-						m_js["axis_motion"] = false;
-						m_js["button_down"] = false;
-						m_js["button_up"] = false;
-					}
+					clear_axis_button_status();
+					return false;
 				}
 
 				// LogDebug("dataqueue size = %ld\n", dataqueue.size());
@@ -638,8 +694,220 @@ public:
 
 		return true;
 	}
+};
+#endif
 
-	friend std::ostream &operator<<(std::ostream &ostr, const VirtualGampad &vg);
+class VirtualGampadUDP : public VirtualGampad
+{
+private:
+	int m_sock = -1;
+
+protected:
+
+public:
+	static std::unique_ptr<VirtualGampadUDP> Create(const std::string &name, const std::string &service, em_Mode mode)
+	{
+		auto vgmpad = std::make_unique<VirtualGampadUDP>();
+		auto ret = vgmpad->open(name, service, mode);
+
+		LogInfo("======== Virtual Gamepad ========\n");
+
+		if (!ret) {
+			LogError("virtual gamepad -- can't opened\n");
+			// vgmpad.reset();
+		} else {
+			std::string mode_str;
+			if (mode == em_Mode::RECEIVE) {
+				mode_str = "Receive";
+			} else if (mode == em_Mode::SEND) {
+				mode_str = "Send";
+			} else {
+				mode_str = "None";
+			}
+			LogSuccess("virtual gamepad -- opened(%s) %s:%s\n", mode_str.c_str(), name.c_str(), service.c_str());
+		}
+
+		return std::move(vgmpad);
+	}
+
+	// Is Gamepad Attached.
+	bool IsAttached() const override { return (m_sock >= 0); }
+
+	bool Poll( uint32_t timeout=0 ) override
+	{
+		return receive(timeout);
+	}
+
+	VirtualGampadUDP() {}
+
+	virtual ~VirtualGampadUDP()
+	{
+		if (!close()) {
+			LogError("ERROR!! VirtualGamepad close.\n");
+			// exit(EXIT_FAILURE);
+		}
+	}
+
+	bool open(const std::string &name, const std::string &service, em_Mode mode) override
+	{
+		m_mode = mode;
+		m_name = name;
+		m_service = service;
+
+		// get addrinfo.
+		{
+			addrinfo fo = {
+				AI_PASSIVE,
+				AF_UNSPEC,
+				SOCK_DGRAM, IPPROTO_UDP,
+				0, 0,
+				NULL, NULL
+			};
+			addrinfo* val = nullptr;
+			const char *n = (name.empty() || name == "") ? nullptr : name.c_str();
+			const char *s = (service.empty() || service == "") ? nullptr : service.c_str();
+			int erc = getaddrinfo(n, s, &fo, &val);
+			if (erc == 0)
+			{
+				m_ai = *val;
+				freeaddrinfo(val);
+			}
+			else
+			{
+				LogError("ERROR!! getaddrinfo(errno=%d): name=%s, service=%s.\n", erc, name.c_str(), service.c_str());
+				return false;
+			}
+		}
+
+		m_sock = socket(m_ai.ai_family, m_ai.ai_socktype, 0);
+		if ( m_sock < 0 ) {
+			LogError("create socket\n");
+			return false;
+		}
+
+		if (mode == em_Mode::SEND) {
+			// pre config.
+			int yes = 1;
+			setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof yes);
+			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
+			{
+				LogError("VirtualGampadUDP" "ioctl FIONBIO\n");
+				return false;
+			}
+
+			LogInfo("SUCCESS!! open virtual gamepad(SEND).\n");
+
+		} else if (mode == em_Mode::RECEIVE) {
+			// pre config.
+			if (::bind(m_sock, m_ai.ai_addr, m_ai.ai_addrlen) != 0) {
+				LogError("ERROR!! bind\n");
+				return false;
+			}
+
+			int yes = 1;
+			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
+			{
+				LogError("VirtualGampadUDP" "ioctl FIONBIO\n");
+				return false;
+			}
+
+			LogInfo("SUCCESS!! open virtual gamepad(RECEIVE).\n");
+		}
+
+		return true;
+	}
+
+	bool close() override
+	{
+		bool ret = false;
+
+		if (m_sock < 0) {
+			int r = ::close(m_sock);
+			m_sock = -1;
+			if (r >= 0) ret = true;
+		}
+
+		return ret;
+	}
+
+	bool poll(int64_t time_out = 33) override
+	{
+		if (m_sock == -1)
+		{
+			if (!open(m_name, m_service, m_mode)) return false;
+		}
+
+		const auto str_direction = m_mode == em_Mode::RECEIVE ? "source" : "target";
+
+		{
+			if (m_mode == em_Mode::RECEIVE) {
+				std::list<std::vector<char>> dataqueue;
+				if (m_sock >= 0)
+				{
+					std::vector<char> pkt(1500);
+					socklen_t sin_size;
+					struct sockaddr_in from_addr;
+					const int stat = recvfrom(m_sock, pkt.data(), pkt.size(), 0, (struct sockaddr *)&from_addr, &sin_size);
+					if (stat <= 0)
+					{
+						// LogInfo("Empty packets\n");
+						clear_axis_button_status();
+						return false;
+					}
+					if (stat < pkt.size()) pkt.resize(stat);
+					dataqueue.push_back(pkt);
+
+				} else {
+					// LogInfo("Empty packets\n");
+					clear_axis_button_status();
+					return false;
+				}
+
+				// LogDebug("dataqueue size = %ld\n", dataqueue.size());
+				while (!dataqueue.empty())
+				{
+					std::vector<char> pkt = dataqueue.front();
+					// m_js = njson::from_cbor(pkt);
+					std::string str = pkt.data();
+					m_js = njson::parse(str);
+					dataqueue.pop_front();
+				}
+
+			} else if (m_mode == em_Mode::SEND) {
+				std::list<std::vector<char>> dataqueue;
+				std::vector<char> pkt(1500);
+				std::stringstream ss;
+				ss /* << std::setw(4) */ << m_js << std::endl;
+				std::string ss_str = ss.str();
+				// auto cbor = njson::to_cbor(m_js);
+				// auto json_size = ss_str.size();
+				// auto cbor_size = cbor.size();
+				if (ss_str.size() + 1 < pkt.size()) {
+					pkt.assign(ss_str.begin(), ss_str.end());
+					pkt.resize(ss_str.size() + 1);
+					pkt.back() = '\0';
+					dataqueue.push_back(pkt);
+				} else {
+					LogError("ERROR!! pkt size is not enough.\n");
+					return false;
+				}
+
+				while (!dataqueue.empty())
+				{
+					std::vector<char> pkt = dataqueue.front();
+					int stat = sendto(m_sock, pkt.data(), pkt.size(), 0, m_ai.ai_addr, m_ai.ai_addrlen);
+					if (stat < 1)
+					{
+						LogError("ERROR!! send UDP packet.\n");
+						return false;
+					}
+					dataqueue.pop_front();
+				}
+			}
+		}
+
+		return true;
+	}
 };
 
 std::ostream &operator<<(std::ostream &ostr, const VirtualGampad &vg)

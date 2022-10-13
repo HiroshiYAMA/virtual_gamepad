@@ -43,7 +43,9 @@ namespace fs = std::filesystem;
 #endif
 #endif
 
+#ifdef USE_SRT
 #include <srt.h>
+#endif
 #include "VirtualGamepad.h"
 
 auto Usleep = [](uint64_t t) -> void {
@@ -91,10 +93,12 @@ int main(int argc, char *argv[])
 	}
 	atexit(SDL_Quit);
 
+#ifdef USE_SRT
 	if (srt_startup() < 0) {
 		LogError("Unable to initialize SRT: %s", srt_getlasterror_str());
 		return EXIT_FAILURE;
 	}
+#endif
 
 	/*
 	 * attach signal handler
@@ -103,7 +107,11 @@ int main(int argc, char *argv[])
 		LogError("can't catch SIGINT\n");
 
 	std::unique_ptr<VirtualGampad> vgmpad;
-	vgmpad = VirtualGampad::Create(name, service, VirtualGampad::em_Mode::RECEIVE);
+#ifdef USE_SRT
+	vgmpad = VirtualGampadSRT::Create(name, service, VirtualGampad::em_Mode::RECEIVE);
+#else
+	vgmpad = VirtualGampadUDP::Create(name, service, VirtualGampad::em_Mode::RECEIVE);
+#endif
 	if (!vgmpad) {
 		LogError("ERROR!! create virtual gamepad.\n");
 		return EXIT_FAILURE;
@@ -121,10 +129,12 @@ int main(int argc, char *argv[])
 		Usleep((1.0 / fps) * 1'000'000.0);
 	}
 
+#ifdef USE_SRT
 	if (srt_cleanup() != 0) {
 		LogError("Unable to cleanup SRT: %s", srt_getlasterror_str());
 		return EXIT_FAILURE;
 	}
+#endif
 
 	return EXIT_SUCCESS;
 }
