@@ -324,6 +324,7 @@ class VirtualGamepadSRT : public VirtualGamepad
 {
 private:
 	SRTSOCKET m_sock = SRT_INVALID_SOCK;
+	SRTSOCKET m_sock_listen = SRT_INVALID_SOCK;
 
 	// epoll.
 	int m_pollid = -1;
@@ -401,6 +402,8 @@ public:
 		m_name = name;
 		m_service = service;
 
+		bool is_caller = (name != "") ? true : false;
+
 		// get addrinfo.
 		{
 			addrinfo fo = {
@@ -423,7 +426,7 @@ public:
 
 		m_sock = srt_create_socket();
 		if ( m_sock == SRT_ERROR ) {
-			LogError("srt_create_socket\n");
+			LogError("ERROR!! srt_create_socket\n");
 			return false;
 		}
 
@@ -438,12 +441,33 @@ public:
 				return false;
 			}
 
-			// connect to the receiver, implicit bind
-			if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
-			{
-				LogError("connect: %s\n", srt_getlasterror_str());
-				srt_close(m_sock);
-				return false;
+			// caller.
+			if (is_caller) {
+				// connect to the receiver, implicit bind
+				if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
+				{
+					LogError("ERROR!! srt_connect: %s\n", srt_getlasterror_str());
+					srt_close(m_sock);
+					return false;
+				}
+
+			// listener.
+			} else {
+				if (srt_bind(m_sock, m_ai->ai_addr, m_ai->ai_addrlen) == SRT_ERROR)
+				{
+					LogError("ERROR!! srt_bind: %s\n", srt_getlasterror_str());
+					srt_close(m_sock);
+					return false;
+				}
+
+				LogVerbose(" listen...\n");
+
+				if (srt_listen(m_sock, 1) == SRT_ERROR)
+				{
+					LogError("ERROR!! srt_listen: %s\n", srt_getlasterror_str());
+					srt_close(m_sock);
+					return false;
+				}
 			}
 
 			// post config.
@@ -475,12 +499,33 @@ public:
 				return false;
 			}
 
-			// connect to the receiver, implicit bind
-			if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
-			{
-				LogError("connect: %s\n", srt_getlasterror_str());
-				srt_close(m_sock);
-				return false;
+			// caller.
+			if (is_caller) {
+				// connect to the receiver, implicit bind
+				if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
+				{
+					LogError("ERROR!! connect: %s\n", srt_getlasterror_str());
+					srt_close(m_sock);
+					return false;
+				}
+
+			// listener.
+			} else {
+				if (srt_bind(m_sock, m_ai->ai_addr, m_ai->ai_addrlen) == SRT_ERROR)
+				{
+					LogError("ERROR!! srt_bind: %s\n", srt_getlasterror_str());
+					srt_close(m_sock);
+					return false;
+				}
+
+				LogVerbose(" listen...\n");
+
+				if (srt_listen(m_sock, 1) == SRT_ERROR)
+				{
+					LogError("ERROR!! srt_listen: %s\n", srt_getlasterror_str());
+					srt_close(m_sock);
+					return false;
+				}
 			}
 
 			// post config.
@@ -530,7 +575,7 @@ public:
 			if (!open(m_name, m_service, m_mode)) return false;
 		}
 
-		const auto str_direction = m_mode == em_Mode::RECEIVE ? "source" : "target";
+		const auto str_direction = (m_mode == em_Mode::RECEIVE) ? "source" : "target";
 
 		m_srtrfdslen = 2;
 		m_srtwfdslen = 2;
@@ -547,7 +592,8 @@ public:
 			// || m_mode == em_Mode::SEND
 			)
 		{
-			for (size_t i = 0; i < sizeof(m_srtrwfds) / sizeof(SRTSOCKET); i++)
+			bool doabort = false;
+			for (size_t i = 0; i < sizeof(m_srtrwfds) / sizeof(SRTSOCKET) && !doabort; i++)
 			{
 				SRTSOCKET s = m_srtrwfds[i];
 				if (s == SRT_INVALID_SOCK)
@@ -569,53 +615,64 @@ public:
 				SRT_SOCKSTATUS status = srt_getsockstate(s);
 				switch (status)
 				{
-	// 			case SRTS_LISTENING:
-	// 				{
-	// 					const bool res = (issource) ?
-	// 						src->AcceptNewClient() : tar->AcceptNewClient();
-	// 					if (!res)
-	// 					{
-	// 						cerr << "Failed to accept SRT connection"
-	// 							<< endl;
-	// 						doabort = true;
-	// 						break;
-	// 					}
+				case SRTS_LISTENING:
+					{
+						LogVerbose(" accept... \n");
 
-	// 					srt_epoll_remove_usock(pollid, s);
+						m_sock_listen = m_sock;
+						sockaddr sa = {};
+						int sa_len = sizeof(sa);
+						m_sock = srt_accept(m_sock_listen, &sa, &sa_len);
 
-	// 					SRTSOCKET ns = (issource) ?
-	// 						src->GetSRTSocket() : tar->GetSRTSocket();
-	// 					int events = SRT_EPOLL_IN | SRT_EPOLL_ERR;
-	// 					if (srt_epoll_add_usock(pollid, ns, &events))
-	// 					{
-	// 						cerr << "Failed to add SRT client to poll, "
-	// 							<< ns << endl;
-	// 						doabort = true;
-	// 					}
-	// 					else
-	// 					{
-	// 						if (!cfg.quiet)
-	// 						{
-	// 							cerr << "Accepted SRT "
-	// 								<< dirstring
-	// 								<<  " connection"
-	// 								<< endl;
-	// 						}
-	// #ifndef _WIN32
-	// 						if (cfg.timeout_mode == 1 && cfg.timeout > 0)
-	// 						{
-	// 							if (!cfg.quiet)
-	// 								cerr << "TIMEOUT: cancel\n";
-	// 							alarm(0);
-	// 						}
-	// #endif
-	// 						if (issource)
-	// 							srcConnected = true;
-	// 						else
-	// 							tarConnected = true;
-	// 					}
-	// 				}
-	// 				break;
+						// we do one client connection at a time,
+						// so close the listener.
+						srt_close(m_sock_listen);
+						m_sock_listen = SRT_INVALID_SOCK;
+
+						if ( m_sock == SRT_INVALID_SOCK )
+						{
+							LogError("Failed to accept SRT connection\n");
+							doabort = true;
+							break;
+						}
+
+						LogVerbose(" connected.\n");
+
+						// pre config.
+						bool no = false;
+						int result;
+						result = srt_setsockopt(m_sock, 0, SRTO_RCVSYN, &no, sizeof no);
+						if ( result == -1 ) {
+							LogError("Can't set SRT option : %s(%s)\n", "SRTO_RCVSYN", no ? "true" : "false");
+							srt_close(m_sock);
+							doabort = true;
+							break;
+						}
+
+						// post config.
+						result = srt_setsockopt(m_sock, 0, SRTO_SNDSYN, &no, sizeof no);
+						if ( result == -1 ) {
+							LogError("Can't set SRT option : %s(%s)\n", "SRTO_SNDSYN", no ? "true" : "false");
+							srt_close(m_sock);
+							doabort = true;
+							break;
+						}
+
+						srt_epoll_remove_usock(m_pollid, s);	// remove listen event.
+
+						int events = SRT_EPOLL_IN | SRT_EPOLL_OUT | SRT_EPOLL_ERR;
+						if (srt_epoll_add_usock(m_pollid, m_sock, &events))
+						{
+							LogError("Failed to add SRT client to poll, %d\n", m_sock);
+							doabort = true;
+						}
+						else
+						{
+							LogVerbose("Accepted SRT %s connection\n", str_direction);
+							m_connected = true;
+						}
+					}
+					break;
 				case SRTS_BROKEN:
 				case SRTS_NONEXIST:
 				case SRTS_CLOSED:
@@ -842,7 +899,7 @@ public:
 
 		m_sock = socket(m_ai->ai_family, m_ai->ai_socktype, 0);
 		if ( m_sock < 0 ) {
-			LogError("create socket\n");
+			LogError("ERROR!! create socket\n");
 			return false;
 		}
 
@@ -852,7 +909,7 @@ public:
 			setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof yes);
 			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
 			{
-				LogError("VirtualGamepadUDP" "ioctl FIONBIO\n");
+				LogError("ERROR!! VirtualGamepadUDP ioctl FIONBIO\n");
 				return false;
 			}
 
@@ -868,7 +925,7 @@ public:
 			int yes = 1;
 			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
 			{
-				LogError("VirtualGamepadUDP" "ioctl FIONBIO\n");
+				LogError("ERROR!! VirtualGamepadUDP ioctl FIONBIO\n");
 				return false;
 			}
 
