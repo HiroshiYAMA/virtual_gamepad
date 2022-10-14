@@ -430,7 +430,7 @@ public:
 			return false;
 		}
 
-		if (mode == em_Mode::SEND) {
+		auto open_socket = [&]() -> bool {
 			// pre config.
 			bool no = false;
 			int result;
@@ -486,65 +486,16 @@ public:
 				return false;
 			}
 
-			LogInfo("SUCCESS!! open virtual gamepad(SEND).\n");
+			return true;
+		};
+
+		if (mode == em_Mode::SEND) {
+			if (!open_socket()) return false;
+			else LogInfo("SUCCESS!! open virtual gamepad(SEND).\n");
 
 		} else if (mode == em_Mode::RECEIVE) {
-			// pre config.
-			bool no = false;
-			int result;
-			result = srt_setsockopt(m_sock, 0, SRTO_RCVSYN, &no, sizeof no);
-			if ( result == -1 ) {
-				LogError("Can't set SRT option : %s(%s)\n", "SRTO_RCVSYN", no ? "true" : "false");
-				srt_close(m_sock);
-				return false;
-			}
-
-			// caller.
-			if (is_caller) {
-				// connect to the receiver, implicit bind
-				if (SRT_ERROR == srt_connect(m_sock, m_ai->ai_addr, m_ai->ai_addrlen))
-				{
-					LogError("ERROR!! connect: %s\n", srt_getlasterror_str());
-					srt_close(m_sock);
-					return false;
-				}
-
-			// listener.
-			} else {
-				if (srt_bind(m_sock, m_ai->ai_addr, m_ai->ai_addrlen) == SRT_ERROR)
-				{
-					LogError("ERROR!! srt_bind: %s\n", srt_getlasterror_str());
-					srt_close(m_sock);
-					return false;
-				}
-
-				LogVerbose(" listen...\n");
-
-				if (srt_listen(m_sock, 1) == SRT_ERROR)
-				{
-					LogError("ERROR!! srt_listen: %s\n", srt_getlasterror_str());
-					srt_close(m_sock);
-					return false;
-				}
-			}
-
-			// post config.
-			result = srt_setsockopt(m_sock, 0, SRTO_SNDSYN, &no, sizeof no);
-			if ( result == -1 ) {
-				LogError("Can't set SRT option : %s(%s)\n", "SRTO_SNDSYN", no ? "true" : "false");
-				srt_close(m_sock);
-				return false;
-			}
-
-			int events = SRT_EPOLL_IN | SRT_EPOLL_OUT | SRT_EPOLL_ERR;
-			if (srt_epoll_add_usock(m_pollid, m_sock, &events))
-			{
-				LogError("Failed to add SRT destination to poll, %d\n", m_sock);
-				srt_close(m_sock);
-				return false;
-			}
-
-			LogInfo("SUCCESS!! open virtual gamepad(RECEIVE).\n");
+			if (!open_socket()) return false;
+			else LogInfo("SUCCESS!! open virtual gamepad(RECEIVE).\n");
 		}
 
 		return true;
