@@ -858,7 +858,12 @@ public:
 			// pre config.
 			int yes = 1;
 			setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof yes);
+#if defined(_WIN32)
+			unsigned long ulyes = 1;
+			if (ioctlsocket(m_sock, FIONBIO, &ulyes) == SOCKET_ERROR)
+#else
 			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
+#endif
 			{
 				LogError("ERROR!! VirtualGamepadUDP ioctl FIONBIO\n");
 				return false;
@@ -874,7 +879,12 @@ public:
 			}
 
 			int yes = 1;
+#if defined(_WIN32)
+			unsigned long ulyes = 1;
+			if (ioctlsocket(m_sock, FIONBIO, &ulyes) == SOCKET_ERROR)
+#else
 			if (ioctl(m_sock, FIONBIO, (const char *)&yes) < 0)
+#endif
 			{
 				LogError("ERROR!! VirtualGamepadUDP ioctl FIONBIO\n");
 				return false;
@@ -896,8 +906,12 @@ public:
 		}
 
 		if (m_sock >= 0) {
-			int r = ::close(m_sock);
-			m_sock = -1;
+#ifdef _WIN32
+				int r = ::closesocket(m_sock);
+#else
+				int r = ::close(m_sock);
+#endif
+				m_sock = -1;
 			if (r >= 0) ret = true;
 		}
 
